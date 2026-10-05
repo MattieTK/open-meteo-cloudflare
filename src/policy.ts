@@ -109,3 +109,48 @@ export function endpointFor(pathname: string): string | null {
   if (!match) return null;
   return Object.hasOwn(ENDPOINTS, match[1]) ? match[1] : null;
 }
+
+/**
+ * Fixed-window request counter per client key.
+ *
+ * Used inside the single Durable Object that fronts the container, which sees every cache miss worldwide, so
+ * the count is exact (the Workers rate limiting binding counts per location and lets bursts through). Counts
+ * live in memory and reset if the object restarts, which is acceptable for abuse protection.
+ */
+export class WindowCounter {
+  private windows = new Map<string, { start: number; count: number }>();
+
+  constructor(
+    private readonly limit: number,
+    private readonly windowMs: number,
+    private readonly maxKeys = 10_000,
+  ) {}
+
+  /** Records a request and returns false if the key has used up its allowance for the current window. */
+  take(key: string, now: number): boolean {
+    let window = this.windows.get(key);
+    if (!window || now - window.start >= this.windowMs) {
+      if (this.windows.size >= this.maxKeys) this.prune(now);
+      window = { start: now, count: 0 };
+      this.windows.set(key, window);
+    }
+    if (window.count >= this.limit) return false;
+    window.count++;
+    return true;
+  }
+
+  /** Seconds until the key's window resets. */
+  retryAfter(key: string, now: number): number {
+    const window = this.windows.get(key);
+    return window ? Math.max(1, Math.ceil((window.start + this.windowMs - now) / 1000)) : 1;
+  }
+
+  private prune(now: number): void {
+    for (const [key, window] of this.windows) if (now - window.start >= this.windowMs) this.windows.delete(key);
+    // Still full of live windows: drop the oldest entries rather than grow without bound.
+    for (const key of this.windows.keys()) {
+      if (this.windows.size < this.maxKeys) break;
+      this.windows.delete(key);
+    }
+  }
+}

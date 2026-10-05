@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cacheKey, endpointFor, locationCount, ttlSeconds } from "../src/policy";
+import { WindowCounter, cacheKey, endpointFor, locationCount, ttlSeconds } from "../src/policy";
 
 const now = new Date("2026-10-05T12:00:00Z");
 const q = (s: string) => new URLSearchParams(s);
@@ -71,5 +71,23 @@ describe("locationCount", () => {
     expect(locationCount(q("latitude=51.5&longitude=0"))).toBe(1);
     expect(locationCount(q("latitude=51.5,52,53&longitude=0,1,2"))).toBe(3);
     expect(locationCount(q("hourly=temperature_2m"))).toBe(1);
+  });
+});
+
+describe("WindowCounter", () => {
+  it("allows up to the limit per window and key, then resets", () => {
+    const counter = new WindowCounter(2, 60_000);
+    expect(counter.take("a", 0)).toBe(true);
+    expect(counter.take("a", 1000)).toBe(true);
+    expect(counter.take("a", 2000)).toBe(false);
+    expect(counter.retryAfter("a", 2000)).toBe(58);
+    expect(counter.take("b", 2000)).toBe(true);
+    expect(counter.take("a", 60_000)).toBe(true);
+  });
+
+  it("stays within its key budget", () => {
+    const counter = new WindowCounter(1, 60_000, 3);
+    for (const key of ["a", "b", "c", "d", "e"]) expect(counter.take(key, 0)).toBe(true);
+    expect((counter as unknown as { windows: Map<string, unknown> }).windows.size).toBeLessThanOrEqual(3);
   });
 });

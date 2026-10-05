@@ -19,7 +19,6 @@ function fakes(overrides: Partial<Deps> = {}): Fakes {
   return {
     cache,
     limitAll: allow,
-    limitOrigin: allow,
     origin: async (path) => {
       originCalls.push(path);
       return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json; charset=utf-8" } });
@@ -27,7 +26,7 @@ function fakes(overrides: Partial<Deps> = {}): Fakes {
     waitUntil: (p) => pending.push(p),
     now: () => new Date("2026-10-05T12:00:00Z"),
     image: "ghcr.io/open-meteo/open-meteo:test",
-    limits: { allPerMinute: 600, originPerMinute: 60 },
+    limits: { allPer10Seconds: 100, originPerMinute: 60 },
     ...overrides,
     originCalls,
     pending,
@@ -65,13 +64,13 @@ describe("handle", () => {
     expect(deps.originCalls).toEqual(["/v1/forecast?hourly=temperature_2m&latitude=51.5&longitude=-0.13"]);
   });
 
-  it("does not count cache hits against the uncached limit", async () => {
-    let originLimitCalls = 0;
-    const deps = fakes({ limitOrigin: { limit: async () => (originLimitCalls++, { success: true }) } });
-    await handle(req("/v1/elevation?latitude=1&longitude=2"), deps);
+  it("passes the client key to the container side, where uncached requests are counted", async () => {
+    const keys: string[] = [];
+    const deps = fakes({ origin: async (_path, key) => (keys.push(key), new Response("{}", { headers: { "content-type": "application/json" } })) });
+    await handle(req("/v1/elevation?latitude=1&longitude=2", { headers: { "cf-connecting-ip": "1.2.3.4" } }), deps);
     await Promise.all(deps.pending);
-    await handle(req("/v1/elevation?latitude=1&longitude=2"), deps);
-    expect(originLimitCalls).toBe(1);
+    await handle(req("/v1/elevation?latitude=1&longitude=2", { headers: { "cf-connecting-ip": "1.2.3.4" } }), deps);
+    expect(keys).toEqual(["1.2.3.4"]);
   });
 
   it("caches 400s briefly and does not cache server errors", async () => {
@@ -108,20 +107,30 @@ describe("handle", () => {
     expect(res.headers.get("access-control-allow-methods")).toContain("GET");
   });
 
-  it("returns 429 when either limit is exceeded", async () => {
+  it("returns 429 when the flood guard trips, without reaching the container", async () => {
     const deny: Limiter = { limit: async () => ({ success: false }) };
-    const all = await handle(req("/v1/forecast?latitude=1"), fakes({ limitAll: deny }));
-    expect(all.status).toBe(429);
-    expect(all.headers.get("retry-after")).toBe("60");
-    const deps = fakes({ limitOrigin: deny });
-    expect((await handle(req("/v1/forecast?latitude=1"), deps)).status).toBe(429);
+    const deps = fakes({ limitAll: deny });
+    const res = await handle(req("/v1/forecast?latitude=1"), deps);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("10");
     expect(deps.originCalls).toHaveLength(0);
+  });
+
+  it("passes the container side's 429 through uncached, with its retry-after", async () => {
+    const deps = fakes({
+      origin: async () => new Response(JSON.stringify({ error: true, reason: "slow down" }), { status: 429, headers: { "content-type": "application/json", "retry-after": "42" } }),
+    });
+    const res = await handle(req("/v1/forecast?latitude=1"), deps);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("42");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(deps.pending).toHaveLength(0);
   });
 
   it("returns 504 when the container is too slow and 502 when it fails", async () => {
     const slow = fakes({
       originTimeoutMs: 10,
-      origin: (_path, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason))),
+      origin: (_path, _key, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason))),
     });
     expect((await handle(req("/v1/archive?latitude=1"), slow)).status).toBe(504);
     const failing = fakes({ origin: async () => Promise.reject(new Error("connection refused")) });

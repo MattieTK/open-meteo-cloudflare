@@ -8,12 +8,23 @@ import { Container, getContainer } from "@cloudflare/containers";
 import { exports } from "cloudflare:workers";
 import { handle } from "./handler";
 import { OPEN_METEO_IMAGE } from "./image";
+import { WindowCounter } from "./policy";
 
 /** All traffic goes to a single named instance, so the container's block cache is shared by every request. */
 const INSTANCE = "primary";
 
 /** Requests the container works on at once before new ones get a 503; it has 1/16 of a vCPU. */
 const MAX_IN_FLIGHT = 8;
+
+/** Carries the rate limit key from the Worker to the Durable Object. The object is not reachable from outside. */
+const CLIENT_KEY_HEADER = "x-weather-client";
+
+function jsonError(status: number, reason: string, retryAfter: number): Response {
+  return new Response(JSON.stringify({ error: true, reason }), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "retry-after": String(retryAfter) },
+  });
+}
 
 export class OpenMeteoServer extends Container<Env> {
   defaultPort = 8080;
@@ -30,17 +41,24 @@ export class OpenMeteoServer extends Container<Env> {
   };
 
   private inFlight = 0;
+  private uncached = new WindowCounter(this.env.LIMITS.originPerMinute, 60_000);
 
   override async fetch(request: Request): Promise<Response> {
+    // Every cache miss passes through this one object, so the per-client count here is exact and global.
+    // The cron's warm-up request carries no key and is not counted.
+    const key = request.headers.get(CLIENT_KEY_HEADER);
+    const now = Date.now();
+    if (key && !this.uncached.take(key, now)) {
+      return jsonError(429, `Too many uncached requests from this address (the limit is ${this.env.LIMITS.originPerMinute} a minute). Please try again shortly.`, this.uncached.retryAfter(key, now));
+    }
     if (this.inFlight >= MAX_IN_FLIGHT) {
-      return new Response(JSON.stringify({ error: true, reason: "The weather server is busy. Please try again in a few seconds." }), {
-        status: 503,
-        headers: { "content-type": "application/json; charset=utf-8", "retry-after": "5" },
-      });
+      return jsonError(503, "The weather server is busy. Please try again in a few seconds.", 5);
     }
     this.inFlight++;
     try {
-      return await super.fetch(request);
+      const forwarded = new Request(request);
+      forwarded.headers.delete(CLIENT_KEY_HEADER);
+      return await super.fetch(forwarded);
     } finally {
       this.inFlight--;
     }
@@ -65,9 +83,8 @@ export default {
     return handle(request, {
       cache: caches.default,
       limitAll: env.LIMIT_ALL,
-      limitOrigin: env.LIMIT_ORIGIN,
-      origin: (pathAndQuery, signal) =>
-        container().fetch(new Request(`http://container${pathAndQuery}`, { headers: { "accept-encoding": "identity" }, signal })),
+      origin: (pathAndQuery, clientKey, signal) =>
+        container().fetch(new Request(`http://container${pathAndQuery}`, { headers: { "accept-encoding": "identity", [CLIENT_KEY_HEADER]: clientKey }, signal })),
       waitUntil: (promise) => ctx.waitUntil(promise),
       now: () => new Date(),
       image: OPEN_METEO_IMAGE,

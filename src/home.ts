@@ -25,7 +25,7 @@ function escape(text: string): string {
   return text.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] as string);
 }
 
-export type Limits = { allPerMinute: number; originPerMinute: number };
+export type Limits = { allPer10Seconds: number; originPerMinute: number };
 
 export function homePage({ origin, image, limits }: { origin: string; image: string; limits: Limits }): string {
   const examples = [
@@ -71,7 +71,7 @@ export function homePage({ origin, image, limits }: { origin: string; image: str
       ${examples.map((u) => `<li><a href="${escape(u)}"><code>${escape(u)}</code></a></li>`).join("\n      ")}
   </ul>
   <p>Forecasts are cached for up to an hour (15 minutes when asking for current or 15-minutely values), archive data for up to 30 days, and elevation and climate data for 30 days.</p>
-  <p>Each address may make about ${limits.allPerMinute} requests a minute, of which about ${limits.originPerMinute} may be uncached. Requests over the limit receive HTTP 429.</p>
+  <p>Each address may make ${limits.originPerMinute} uncached requests a minute, and about ${limits.allPer10Seconds} requests in any 10 seconds in total. Requests over the limit receive HTTP 429 with a <code>Retry-After</code> header.</p>
 
   <h2>Data and licences</h2>
   <p><a href="https://open-meteo.com/">Weather data by Open-Meteo.com</a>, licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>. Open-Meteo builds on open data from:</p>

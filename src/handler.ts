@@ -17,12 +17,13 @@ export type EdgeCache = {
 
 export type Deps = {
   cache: EdgeCache;
-  /** Every API request, including cache hits. */
+  /** A coarse flood guard on every API request, including cache hits. */
   limitAll: Limiter;
-  /** Only requests that miss the cache and reach the container. */
-  limitOrigin: Limiter;
-  /** Sends a GET for a path and query (for example `/v1/forecast?latitude=...`) to the Open-Meteo container. */
-  origin: (pathAndQuery: string, signal: AbortSignal) => Promise<Response>;
+  /**
+   * Sends a GET for a path and query (for example `/v1/forecast?latitude=...`) to the Open-Meteo container.
+   * The client key travels with it, because the per-client limit on uncached requests is counted there.
+   */
+  origin: (pathAndQuery: string, clientKey: string, signal: AbortSignal) => Promise<Response>;
   waitUntil: (promise: Promise<unknown>) => void;
   now: () => Date;
   /** The image reference in use, shown on the homepage. */
@@ -103,7 +104,7 @@ export async function handle(request: Request, deps: Deps): Promise<Response> {
 
   const key = clientKey(request);
   if (!(await deps.limitAll.limit({ key })).success) {
-    return apiError(429, "Too many requests from this address. Please wait a minute and try again.", { "retry-after": "60" });
+    return apiError(429, "Too many requests from this address. Please wait a few seconds and try again.", { "retry-after": "10" });
   }
 
   // Canonical path (no trailing slash) and sorted parameters, so equivalent requests share one cache entry.
@@ -118,14 +119,10 @@ export async function handle(request: Request, deps: Deps): Promise<Response> {
     return withoutBody(response, method);
   }
 
-  if (!(await deps.limitOrigin.limit({ key })).success) {
-    return apiError(429, "Too many uncached requests from this address. Please wait a minute and try again.", { "retry-after": "60" });
-  }
-
   const pathAndQuery = cacheUrl.slice(url.origin.length);
   let upstream: Response;
   try {
-    upstream = await deps.origin(pathAndQuery, AbortSignal.timeout(deps.originTimeoutMs ?? 60_000));
+    upstream = await deps.origin(pathAndQuery, key, AbortSignal.timeout(deps.originTimeoutMs ?? 60_000));
   } catch (error) {
     const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
     console.error(JSON.stringify({ msg: "origin request failed", endpoint, error: String(error) }));
@@ -136,7 +133,7 @@ export async function handle(request: Request, deps: Deps): Promise<Response> {
 
   const ttl = upstream.status === 200 ? ttlSeconds(ENDPOINTS[endpoint], url.searchParams, deps.now()) : upstream.status === 400 ? ERROR_TTL_SECONDS : 0;
   const headers = new Headers(CORS);
-  for (const name of ["content-type", "content-disposition"]) {
+  for (const name of ["content-type", "content-disposition", "retry-after"]) {
     const value = upstream.headers.get(name);
     if (value) headers.set(name, value);
   }

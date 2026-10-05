@@ -7,14 +7,16 @@ import { bindings, defineConfig, defineContainer, exports, triggers } from "cf/c
 import * as entrypoint from "./src/index.ts" with { type: "cf-worker" };
 
 /**
- * Per-client limits for the rate limiting bindings below, also shown on the homepage (through the LIMITS
- * binding, because modules imported here cannot also be imported by the Worker). The bindings count per
- * Cloudflare location, so the limits are approximate.
+ * Per-client limits. The Worker reads them through the LIMITS binding (modules imported here cannot also be
+ * imported by the Worker) for the homepage and the Durable Object.
  */
 const LIMITS = {
-  /** All API requests, cached or not. */
-  allPerMinute: 600,
-  /** Requests that miss the edge cache and are computed by the container. */
+  /**
+   * All API requests, cached or not: a coarse flood guard using the rate limiting binding, which counts per
+   * Cloudflare location and lets short bursts through, so it is not exact.
+   */
+  allPer10Seconds: 100,
+  /** Requests that miss the edge cache and are computed by the container, counted exactly in the Durable Object. */
   originPerMinute: 60,
 };
 
@@ -39,9 +41,8 @@ export default defineConfig({
     // Wakes the container every 10 minutes so it does not sleep and lose its block cache (see OpenMeteoServer.sleepAfter).
     triggers: [triggers.scheduled({ schedule: "*/10 * * * *" })],
     env: {
-      // Namespace ids are account-wide integers; these two are not used by any other Worker.
-      LIMIT_ALL: bindings.rateLimit({ namespace: "7301", simple: { limit: LIMITS.allPerMinute, period: 60 } }),
-      LIMIT_ORIGIN: bindings.rateLimit({ namespace: "7302", simple: { limit: LIMITS.originPerMinute, period: 60 } }),
+      // Namespace ids are account-wide integers; this one is not used by any other Worker.
+      LIMIT_ALL: bindings.rateLimit({ namespace: "7301", simple: { limit: LIMITS.allPer10Seconds, period: 10 } }),
       LIMITS: bindings.json(LIMITS),
     },
     exports: {

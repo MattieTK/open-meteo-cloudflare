@@ -76,7 +76,7 @@ Trade-offs considered:
 
 ## Deploying
 
-From the repository root, signed in with the cf CLI (it deploys to your default account) and with Docker running (the Dockerfile is rebuilt and pushed to Cloudflare's registry):
+From the repository root, signed in with the cf CLI and with Docker running. If your login can see more than one Cloudflare account, put `CLOUDFLARE_ACCOUNT_ID=<your account id>` in a `.env` file here (it is git-ignored) (the Dockerfile is rebuilt and pushed to Cloudflare's registry):
 
 ```bash
 pnpm install

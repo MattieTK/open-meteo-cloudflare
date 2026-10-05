@@ -76,7 +76,7 @@ Trade-offs considered:
 
 ## Deploying
 
-From `packages/weather/`, with Docker running (the Dockerfile is rebuilt and pushed to Cloudflare's registry):
+From the repository root, signed in with the cf CLI (it deploys to your default account) and with Docker running (the Dockerfile is rebuilt and pushed to Cloudflare's registry):
 
 ```bash
 pnpm install
@@ -92,13 +92,17 @@ pnpm run deploy
 
 `cf deploy` builds the Worker with Vite, builds the image from `Dockerfile`, pushes it to `registry.cloudflare.com` when it changed, updates the Container application `halfhour-weather-open-meteo` and deploys the Worker `halfhour-weather` with its custom domain and cron trigger. Use `pnpm exec cf deploy --containers-rollout none` for Worker-only changes, so the running container (and its cache) is left alone.
 
-The cf CLI handles Containers in `cloudflare.config.ts` (`defineContainer` and a Durable Object export with `container`), so this package follows `packages/worker` and does not use wrangler.
+The cf CLI handles Containers in `cloudflare.config.ts` (`defineContainer` and a Durable Object export with `container`), so this repository does not use wrangler.
 
 Local development: `pnpm dev` builds the image and starts the Worker on port 8788, but on this machine (WSL2, Docker 28) the container never started under `cf dev`: the egress proxy sidecar came up and workerd timed out waiting for the container. The tests cover the handler and policy with fakes, and the image itself can be run directly:
 
 ```bash
 docker run --rm -p 127.0.0.1:8090:8080 -e REMOTE_DATA_DIRECTORY=https://openmeteo.s3.amazonaws.com/data/ -e CACHE_SIZE=1GB ghcr.io/open-meteo/open-meteo:1.6.0
 ```
+
+### Running your own copy
+
+Change `domains` in `cloudflare.config.ts` to a hostname on a zone in your Cloudflare account (or remove it and turn on `workersDev`), and rename the Worker and container if you like. Containers need the Workers Paid plan. The homepage text in `src/home.ts` describes this server; edit it to describe yours.
 
 ## Updating the Open-Meteo image
 
@@ -112,5 +116,5 @@ The image is pinned by tag and digest in two places: the `FROM` line in `Dockerf
 ## Licences
 
 - **Data**: Open-Meteo's API data is [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Credit "Weather data by Open-Meteo.com" with a link wherever it is shown. The upstream providers are listed on the homepage and on [Open-Meteo's licence page](https://open-meteo.com/en/licence). Most are CC BY 4.0 or similar; **UK Met Office** data (`ukmo_*` models, and `best_match` over the UK) is **CC BY-SA 4.0**, which the homepage states. Halfhour requests `models=ecmwf_ifs` for forecasts so that it does not use Met Office data; the archive's default blend (ERA5, ERA5-Land, IFS analysis) has none.
-- **Software**: the Open-Meteo server is AGPL-3.0. We run the official image unmodified (the rebuilt image has the same image ID as upstream), so there are no changes to publish; the homepage still links to the source and names the exact image. This Worker and the Dockerfile are part of this repository.
+- **Software**: the Open-Meteo server is AGPL-3.0. We run the official image unmodified (the rebuilt image has the same image ID as upstream), so there are no changes to publish; the homepage still links to the source and names the exact image. This repository's own code (the Worker, the Dockerfile and the docs) is under the MIT licence in `LICENSE`; the Open-Meteo server it runs keeps its AGPL-3.0 licence.
 - Not affiliated with Open-Meteo or any data provider.

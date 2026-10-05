@@ -78,13 +78,15 @@ describe("handle", () => {
     const r400 = await handle(req("/v1/forecast?latitude=999"), bad);
     expect(r400.status).toBe(400);
     expect(r400.headers.get("cache-control")).toBe("public, max-age=600");
-    expect(bad.pending).toHaveLength(1);
+    await Promise.all(bad.pending);
+    expect(bad.store.size).toBe(1);
 
     const broken = fakes({ origin: async () => new Response("oops", { status: 500 }) });
     const r500 = await handle(req("/v1/forecast?latitude=1"), broken);
     expect(r500.status).toBe(500);
     expect(r500.headers.get("cache-control")).toBe("no-store");
-    expect(broken.pending).toHaveLength(0);
+    await Promise.all(broken.pending);
+    expect(broken.store.size).toBe(0);
   });
 
   it("refuses unknown paths, other methods and long URLs without reaching the container", async () => {
@@ -124,7 +126,15 @@ describe("handle", () => {
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("42");
     expect(res.headers.get("cache-control")).toBe("no-store");
-    expect(deps.pending).toHaveLength(0);
+    await Promise.all(deps.pending);
+    expect(deps.store.size).toBe(0);
+  });
+
+  it("keeps the container request alive with waitUntil, so a slow answer is cached even if the client leaves", async () => {
+    const deps = fakes();
+    await handle(req("/v1/forecast?latitude=1"), deps);
+    // One for the origin request, one for the cache write.
+    expect(deps.pending).toHaveLength(2);
   });
 
   it("returns 504 when the container is too slow and 502 when it fails", async () => {

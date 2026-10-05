@@ -120,6 +120,14 @@ export async function handle(request: Request, deps: Deps): Promise<Response> {
   }
 
   const pathAndQuery = cacheUrl.slice(url.origin.length);
+  // Kept alive with waitUntil, so a slow answer still reaches the cache if the client gives up first
+  // (Halfhour's Worker waits 10 seconds); its retry is then a cache hit.
+  const pending = fromOrigin(deps, endpoint, url, cacheUrl, pathAndQuery, key);
+  deps.waitUntil(pending.catch(() => undefined));
+  return withoutBody(await pending, method);
+}
+
+async function fromOrigin(deps: Deps, endpoint: string, url: URL, cacheUrl: string, pathAndQuery: string, key: string): Promise<Response> {
   let upstream: Response;
   try {
     upstream = await deps.origin(pathAndQuery, key, AbortSignal.timeout(deps.originTimeoutMs ?? 60_000));
@@ -145,5 +153,5 @@ export async function handle(request: Request, deps: Deps): Promise<Response> {
     deps.waitUntil(deps.cache.put(cacheUrl, stored).catch((error) => console.error(JSON.stringify({ msg: "cache put failed", error: String(error) }))));
   }
   response.headers.set("x-cache", "MISS");
-  return withoutBody(response, method);
+  return response;
 }

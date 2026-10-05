@@ -28,6 +28,9 @@ const openMeteo = defineContainer({
   instanceType: "lite",
   // Only one Durable Object name is ever used, so one instance; this also caps the cost.
   maxInstances: 1,
+  // Next to Open-Meteo's bucket (AWS us-west-2). A cold read makes hundreds of range requests to it, so
+  // placing the container there and crossing the Atlantic once per API request is much faster than the reverse.
+  constraints: { regions: ["WNAM"] },
   observability: { logs: { enabled: true } },
 });
 
